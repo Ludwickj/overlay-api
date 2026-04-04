@@ -1,81 +1,84 @@
-import json
+import os
 import uuid
-from pathlib import Path
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile, File, Form
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from .models import (
-    TextAnnotation,
-    LeaderLineAnnotation,
+    CreateJobRequest,
     CreateJobResponse,
     JobStatusResponse,
 )
-from .storage import make_output_paths, OUTPUT_DIR, TEMP_DIR
-from .overlay import apply_annotations_to_pdf, render_pdf_page_to_png
+from .storage import download_file, make_output_paths, OUTPUT_DIR
+from .overlay import (
+    apply_annotations_to_pdf,
+    render_pdf_page_to_png,
+)
 
-app = FastAPI(title="HPP Deterministic Drawing Overlay API", version="1.4.0")
+app = FastAPI(
+    title="HPP Deterministic Drawing Overlay API",
+    version="2.0.0",
+    description="Deterministic overlay service for engineering drawings. No geometry regeneration."
+)
+
+app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+
+JOBS: dict[str, dict] = {}
+
+
+def public_base_url() -> str:
+    return os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+
 
 @app.get("/")
 def root():
-    return {"status": "API running"}
+    return {
+        "status": "API running",
+        "service": "HPP Deterministic Drawing Overlay API",
+        "version": "2.0.0"
+    }
 
-app = FastAPI(title="HPP Deterministic Drawing Overlay API", version="1.4.0")
-
-@app.get("/")
-def root():
-    return {"status": "API running"}
 
 @app.get("/build-check")
 def build_check():
     return {"build_check": "render-uses-latest-code"}
 
-app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
-app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
-
-JOBS = {}
-
-
-def parse_annotations(raw_text: str):
-    raw = json.loads(raw_text)
-    parsed = []
-
-    for item in raw:
-        kind = item.get("kind")
-        if kind == "text":
-            parsed.append(TextAnnotation(**item))
-        elif kind == "leader_line":
-            parsed.append(LeaderLineAnnotation(**item))
-        else:
-            raise ValueError(f"Unsupported annotation kind: {kind}")
-
-    return parsed
-
-
-async def process_uploaded_job(job_id: str, input_path: Path, page_number: int, annotations: list):
+async def process_overlay_job(job_id: str, request: CreateJobRequest):
     try:
         JOBS[job_id] = {"status": "processing"}
+
+        source = request.source
+        suffix = f".{source.fileType.lower()}"
+        input_path = await download_file(str(source.fileUrl), suffix=suffix)
+
+        if source.fileType.lower() != "pdf":
+            raise ValueError("Only PDF source files are currently supported for deterministic drawing overlay")
 
         output_pdf, output_png = make_output_paths(job_id)
 
         apply_annotations_to_pdf(
             input_pdf=input_path,
             output_pdf=output_pdf,
-            annotations=annotations,
-            page_number_1_based=page_number,
+            annotations=request.annotations,
+            page_number_1_based=source.pageNumber,
         )
 
         render_pdf_page_to_png(
             input_pdf=output_pdf,
             output_png=output_png,
-            page_number_1_based=page_number,
+            page_number_1_based=source.pageNumber,
             dpi=200,
         )
 
+        base = public_base_url()
+        if not base:
+            raise ValueError("PUBLIC_BASE_URL environment variable is not configured")
+
         JOBS[job_id] = {
             "status": "completed",
-            "annotatedPdfUrl": f"http://127.0.0.1:8000/outputs/{output_pdf.name}",
-            "annotatedPngUrl": f"http://127.0.0.1:8000/outputs/{output_png.name}",
+            "annotatedPdfUrl": f"{base}/outputs/{output_pdf.name}",
+            "annotatedPngUrl": f"{base}/outputs/{output_png.name}",
             "message": "Overlay complete",
         }
 
@@ -86,28 +89,16 @@ async def process_uploaded_job(job_id: str, input_path: Path, page_number: int, 
         }
 
 
-@app.post("/upload-job", response_model=CreateJobResponse, status_code=202)
-async def create_upload_job(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    pageNumber: int = Form(1),
-    annotations: str = Form(...),
-):
+@app.post("/overlay-jobs", response_model=CreateJobResponse, status_code=202)
+async def create_overlay_job(request: CreateJobRequest, background_tasks: BackgroundTasks):
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {"status": "queued"}
-
-    input_path = TEMP_DIR / f"{job_id}.pdf"
-    content = await file.read()
-    input_path.write_bytes(content)
-
-    parsed_annotations = parse_annotations(annotations)
-
-    background_tasks.add_task(process_uploaded_job, job_id, input_path, pageNumber, parsed_annotations)
+    background_tasks.add_task(process_overlay_job, job_id, request)
     return CreateJobResponse(jobId=job_id, status="queued")
 
 
-@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job(job_id: str):
+@app.get("/overlay-jobs/{job_id}", response_model=JobStatusResponse)
+async def get_overlay_job_status(job_id: str):
     job = JOBS.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
