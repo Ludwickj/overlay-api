@@ -18,8 +18,11 @@ from .overlay import (
 app = FastAPI(
     title="HPP Deterministic Drawing Overlay API",
     version="2.0.0",
-    description="Deterministic overlay service for engineering drawings. No geometry regeneration."
-)
+    description="Deterministic overlay service for engineering drawings. No geometry regeneration.",
+    servers=[
+        {"url": "https://overlay-api-127g.onrender.com"}
+    ],
+
 
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
