@@ -15,6 +15,10 @@ from .overlay import apply_annotations_to_pdf, render_pdf_page_to_png
 
 app = FastAPI(title="HPP Deterministic Drawing Overlay API", version="1.4.0")
 
+@app.get("/")
+def root():
+    return {"status": "API running"}
+
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 JOBS = {}
