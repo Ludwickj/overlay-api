@@ -19,6 +19,18 @@ app = FastAPI(title="HPP Deterministic Drawing Overlay API", version="1.4.0")
 def root():
     return {"status": "API running"}
 
+app = FastAPI(title="HPP Deterministic Drawing Overlay API", version="1.4.0")
+
+@app.get("/")
+def root():
+    return {"status": "API running"}
+
+@app.get("/build-check")
+def build_check():
+    return {"build_check": "render-uses-latest-code"}
+
+app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
+
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
 
 JOBS = {}
