@@ -22,6 +22,7 @@ app = FastAPI(
     servers=[
         {"url": "https://overlay-api-127g.onrender.com"}
     ],
+)
 
 
 app.mount("/outputs", StaticFiles(directory=str(OUTPUT_DIR)), name="outputs")
